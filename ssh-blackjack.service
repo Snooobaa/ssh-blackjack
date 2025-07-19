@@ -1,0 +1,28 @@
+[Unit]
+Description=SSH Blackjack Game Server
+After=network.target
+
+[Service]
+Type=simple
+User=gameuser
+Group=gameuser
+WorkingDirectory=/opt/ssh-blackjack
+ExecStart=/usr/bin/go run main.go
+Restart=always
+RestartSec=10
+
+# Load environment variables
+EnvironmentFile=/opt/ssh-blackjack/.env
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ssh-blackjack /tmp
+
+# Environment
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=multi-user.target

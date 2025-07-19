@@ -273,6 +273,11 @@ func main() {
 		_, _ = io.Copy(ptmx, s)
 	})
 
-	log.Println("Listening on port 2223...")
-	log.Fatal(ssh.ListenAndServe(":2223", nil))
+	port := os.Getenv("SSH_PORT")
+	if port == "" {
+		port = "22" // default port
+	}
+	
+	log.Printf("Listening on port %s...", port)
+	log.Fatal(ssh.ListenAndServe(":"+port, nil))
 }

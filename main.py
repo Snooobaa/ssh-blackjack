@@ -1,8 +1,15 @@
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Static
+from textual.containers import Horizontal, Vertical, Container
+from textual.widgets import Button, Static, Input
+from textual.binding import Binding
 import random
 import asyncio
+import json
+import os
+import sys
+import threading
+import re
+import time
 
 class Card(Static):
     def __init__(self, rank: str, suit: str, suit_id: str) -> None:
@@ -81,8 +88,13 @@ def generate_shoe(num_decks=6):
     return shoe
 
 class BlackjackApp(App[str]):
-    """A Textual blackjack game application"""
+    """A Textual blackjack game application with chat"""
     CSS_PATH = "button.tcss"
+    
+    BINDINGS = [
+        Binding("ctrl+c", "quit", "Quit"),
+        Binding("enter", "send_chat", "Send chat message", show=False),
+    ]
 
     def __init__(self):
         super().__init__()
@@ -90,9 +102,161 @@ class BlackjackApp(App[str]):
         self.player_hand = Hand("Player")
         self.dealer_hand = Hand("Dealer")
         self.console_log = None
+        self.chat_log = None
+        self.chat_input = None
+        
+        # Get session info from environment
+        self.session_id = os.getenv("SSH_SESSION_ID", "local")
+        self.username = os.getenv("SSH_USERNAME", "Player")
+        
+        # Track last chat message count
+        self.last_chat_line = 0
+
+    def display_chat_message(self, msg):
+        """Display a chat message in the chat log"""
+        if self.chat_log:
+            username = msg.get("username", "Unknown")
+            message = msg.get("message", "")
+            timestamp = msg.get("timestamp", "")
+            
+            # Format timestamp
+            if timestamp:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    time_str = dt.strftime("%H:%M:%S")
+                except:
+                    time_str = ""
+            else:
+                from datetime import datetime
+                time_str = datetime.now().strftime("%H:%M:%S")
+            
+            formatted_msg = f"[{time_str}] {username}: {message}"
+            
+            # Get current chat log content
+            current_content = str(self.chat_log.renderable) if self.chat_log.renderable else ""
+            if current_content:
+                new_content = current_content + "\n" + formatted_msg
+            else:
+                new_content = formatted_msg
+            
+            self.chat_log.update(new_content)
+
+    def send_chat_message(self, message: str):
+        """Send a chat message to all connected users"""
+        if message.strip():
+            # Always show the message immediately to the sender for better UX
+            from datetime import datetime
+            msg = {
+                "username": self.username,
+                "message": message.strip(),
+                "timestamp": datetime.now().isoformat()
+            }
+            self.display_chat_message(msg)
+            
+            if self.session_id != "local":
+                # Send via file-based communication to Go server
+                chat_msg = {
+                    "message": message.strip(),
+                    "username": self.username,
+                    "session_id": self.session_id,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }
+                chat_json = json.dumps(chat_msg)
+                
+                # Write to a dedicated chat file that the Go server monitors
+                try:
+                    with open('/tmp/ssh-chat-messages.log', 'a') as f:
+                        f.write(f"{chat_json}\n")
+                        f.flush()
+                    
+                    # Also write to debug file
+                    with open('/tmp/python-chat-debug.log', 'a') as f:
+                        f.write(f"[{self.session_id}] Sent to file: {chat_json}\n")
+                        f.flush()
+                        
+                except Exception as e:
+                    # Fallback: write to debug log
+                    try:
+                        with open('/tmp/python-chat-debug.log', 'a') as f:
+                            f.write(f"[{self.session_id}] ERROR writing chat: {e}\n")
+                            f.flush()
+                    except:
+                        pass
+
+    def check_for_chat_messages(self):
+        """Check for incoming chat messages from file"""
+        try:
+            chat_file = "/tmp/ssh-chat.log"
+            if os.path.exists(chat_file):
+                with open(chat_file, 'r') as f:
+                    lines = f.readlines()
+                
+                # Process new lines since last check
+                new_lines = lines[self.last_chat_line:]
+                for line in new_lines:
+                    line = line.strip()
+                    if line:
+                        try:
+                            msg = json.loads(line)
+                            # Don't display our own messages that come back from server
+                            # (we already displayed them immediately when sending)
+                            if msg.get("username") != self.username:
+                                self.display_chat_message(msg)
+                        except json.JSONDecodeError:
+                            # Silently ignore malformed JSON lines
+                            pass
+                
+                self.last_chat_line = len(lines)
+        except Exception:
+            # Silently ignore file reading errors
+            pass
+        
+        # Schedule next check
+        self.set_timer(1.0, self.check_for_chat_messages)
+
+    def send_test_message(self):
+        """Send a test message to verify chat functionality"""
+        test_msg = f"Auto-test message from {self.username}"
+        sys.stderr.write(f"DEBUG: Sending auto-test message: {test_msg}\n")
+        sys.stderr.flush()
+        self.send_chat_message(test_msg)
+
+    def action_send_chat(self):
+        """Action to send chat message when Enter is pressed"""
+        if self.chat_input and self.chat_input.has_focus:
+            message = self.chat_input.value
+            if message.strip():
+                self.send_chat_message(message)
+                self.chat_input.value = ""
+                sys.stderr.write(f"DEBUG: Chat message sent via action: '{message}'\n")
+                sys.stderr.flush()
 
     def on_mount(self):
         self.console_log = self.query_one("#log", Static)
+        self.chat_log = self.query_one("#chat-log", Static)
+        self.chat_input = self.query_one("#chat-input", Input)
+        
+        # Debug: write session info to file
+        try:
+            with open('/tmp/python-startup-debug.log', 'a') as f:
+                f.write(f"Session ID: {self.session_id}\n")
+                f.write(f"Username: {self.username}\n")
+                f.write(f"Is local: {self.session_id == 'local'}\n")
+                f.flush()
+        except:
+            pass
+        
+        # Welcome message
+        welcome_msg = f"Welcome {self.username}! You can chat with other players here."
+        self.chat_log.update(welcome_msg)
+        
+        # Start chat message monitoring
+        self.set_timer(1.0, self.check_for_chat_messages)
+        
+        # Send a test message after 3 seconds if not in local mode
+        if self.session_id != "local":
+            self.set_timer(3.0, self.send_test_message)
 
     def deal_new_hand(self):
         """Deal a new hand to both player and dealer"""
@@ -181,26 +345,34 @@ class BlackjackApp(App[str]):
 
     def compose(self) -> ComposeResult:
         """Compose the initial UI layout"""
-        with Vertical(id="screen"):
-            yield Static("Dealer Total: ???", id="dealer-total")
-            with Horizontal(id="dealer-hand"):
-                pass
-            yield Static("Player Total: 0 (Best: 0)", id="player-total")
-            with Horizontal(id="player-hand"):
-                pass
+        with Horizontal(id="main-layout"):
+            # Left side - Game
+            with Vertical(id="game-area"):
+                yield Static("Dealer Total: ???", id="dealer-total")
+                with Horizontal(id="dealer-hand"):
+                    pass
+                yield Static("Player Total: 0 (Best: 0)", id="player-total")
+                with Horizontal(id="player-hand"):
+                    pass
 
-            with Horizontal(id="button-row"):
-                yield Button("Deal", id="deal-button")
-                
-                hit_button = Button("Hit", id="hit-button")
-                hit_button.visible = False
-                yield hit_button
-                
-                stand_button = Button("Stand", id="stand-button")
-                stand_button.visible = False
-                yield stand_button
-                
-            yield Static("Welcome to Blackjack! Press Deal to start.", id="log")
+                with Horizontal(id="button-row"):
+                    yield Button("Deal", id="deal-button")
+                    
+                    hit_button = Button("Hit", id="hit-button")
+                    hit_button.visible = False
+                    yield hit_button
+                    
+                    stand_button = Button("Stand", id="stand-button")
+                    stand_button.visible = False
+                    yield stand_button
+                    
+                yield Static("Welcome to Blackjack! Press Deal to start.", id="log")
+            
+            # Right side - Chat
+            with Vertical(id="chat-area"):
+                yield Static("💬 Chat", id="chat-title")
+                yield Static("", id="chat-log", classes="chat-log")
+                yield Input(placeholder="Type a message and press Enter...", id="chat-input")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press events"""
@@ -212,6 +384,28 @@ class BlackjackApp(App[str]):
             await self.handle_stand()
         else:
             self.console_log.update(f"Unknown button pressed: {event.button.id}")
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle chat input submission"""
+        sys.stderr.write(f"DEBUG: Input submitted event triggered for {event.input.id}\n")
+        sys.stderr.flush()
+        
+        if event.input.id == "chat-input":
+            message = event.input.value
+            sys.stderr.write(f"DEBUG: Chat input received: '{message}'\n")
+            sys.stderr.flush()
+            
+            if message.strip():
+                self.send_chat_message(message)
+                event.input.value = ""
+                sys.stderr.write(f"DEBUG: Chat message sent and input cleared\n")
+                sys.stderr.flush()
+            else:
+                sys.stderr.write(f"DEBUG: Empty message, not sending\n")
+                sys.stderr.flush()
+        
+        # Prevent the key binding from also triggering
+        event.stop()
 
     async def handle_deal(self):
         """Handle the deal button press"""

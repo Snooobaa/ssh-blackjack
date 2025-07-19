@@ -1,0 +1,50 @@
+Button {
+    margin: 1 2;
+}
+
+#button-row {
+    align-horizontal: center;
+    align-vertical: middle;
+}
+
+#screen {
+    height: 100%;
+    width: 100%;
+    align: center middle;
+}
+
+#log {
+    border: round purple;
+}
+
+#player-hand {
+    align-horizontal: center;
+    align-vertical: middle;
+}
+#dealer-total,
+#player-total {
+    width: 100%;
+    text-align: center;
+    content-align: center middle;
+}
+#dealer-hand {
+    align-horizontal: center;
+}
+
+Horizontal > VerticalScroll {
+    width: 24;
+}
+
+.header {
+    margin: 1 0 0 2;
+    text-style: bold;
+}
+
+Card {
+    border: round;
+    width: 9;
+    height: auto;
+    padding: 1;
+    content-align: center middle;
+    align-vertical: middle;
+}
